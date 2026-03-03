@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f8fc;
+  --foreground: #122130;
+  --card: #ffffff;
+  --line: #d7e1eb;
+  --primary: #0f5a78;
+  --primary-contrast: #f2fbff;
+  --danger: #a73737;
+  --muted: #607588;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background:
+    radial-gradient(circle at 90% -10%, #dff3ff 0%, transparent 30%),
+    radial-gradient(circle at 0% 100%, #e8f7ef 0%, transparent 28%),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 8px 22px rgba(18, 33, 48, 0.06);
+}
+
+.field {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.55rem 0.7rem;
+  width: 100%;
+}
+
+.field:focus {
+  outline: 2px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.btn {
+  border-radius: 10px;
+  padding: 0.6rem 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: var(--primary-contrast);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.badge {
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+}

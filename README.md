@@ -1,6 +1,8 @@
 # Inventario Cloud (MVP)
 Aplicativo web para control de inventarios con:
 
+![Vista del sistema Inventario Cloud TLS](descarga.png)
+
 - Productos con imagen.
 - Entradas y salidas de stock.
 - Campo de trazabilidad: para que se uso, cantidad y quien retiro.

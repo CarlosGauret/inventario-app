@@ -8,6 +8,7 @@ Aplicativo web para control de inventarios con:
 - Campo de trazabilidad: para que se uso, cantidad y quien retiro.
 - Historial de movimientos.
 - Funcion para borrar movimientos antiguos segun regla configurable.
+- alt i p
 
 ## 1. Requisitos
 - Node.js 20 LTS (recomendado para evitar incompatibilidades).

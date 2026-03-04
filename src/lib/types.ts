@@ -10,7 +10,7 @@ export type Product = {
   min_stock: number;
   active: boolean;
   created_at: string;
-  product_images?: { path: string }[];
+  product_images?: { id: string; path: string; created_at?: string }[];
 };
 
 export type Movement = {

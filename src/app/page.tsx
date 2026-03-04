@@ -108,6 +108,8 @@ export default function Home() {
   const [selectedAudit, setSelectedAudit] = useState<AuditLog | null>(null);
   const [highlightProductId, setHighlightProductId] = useState<string | null>(null);
   const [highlightMovementId, setHighlightMovementId] = useState<string | null>(null);
+  const [managingPhotosProductId, setManagingPhotosProductId] = useState<string | null>(null);
+  const [photoBusyImageId, setPhotoBusyImageId] = useState<string | null>(null);
   const productsSectionRef = useRef<HTMLElement | null>(null);
   const movementsSectionRef = useRef<HTMLElement | null>(null);
 
@@ -136,6 +138,10 @@ export default function Home() {
     () => new Map(movements.map((movement) => [movement.id, movement])),
     [movements],
   );
+  const managingPhotosProduct = useMemo(
+    () => products.find((product) => product.id === managingPhotosProductId) ?? null,
+    [products, managingPhotosProductId],
+  );
 
   function actionLabel(action: string) {
     const map: Record<string, string> = {
@@ -143,6 +149,8 @@ export default function Home() {
       PRODUCT_UPDATE: "Se modifico producto",
       PRODUCT_DELETE: "Se elimino producto",
       PRODUCT_ADD_IMAGES: "Se agregaron fotos",
+      PRODUCT_DELETE_IMAGE: "Se elimino foto",
+      PRODUCT_REPLACE_IMAGE: "Se reemplazo foto",
       MOVEMENT_CREATE: "Se registro movimiento",
       MOVEMENT_UPDATE: "Se modifico movimiento",
       MOVEMENT_DELETE: "Se elimino movimiento",
@@ -180,6 +188,12 @@ export default function Home() {
     }
     if (log.action === "PRODUCT_ADD_IMAGES") {
       return `Se agregaron ${String(detail.imagesUploaded ?? 0)} imagen(es) al producto.`;
+    }
+    if (log.action === "PRODUCT_DELETE_IMAGE") {
+      return "Se elimino una imagen del producto.";
+    }
+    if (log.action === "PRODUCT_REPLACE_IMAGE") {
+      return "Se reemplazo una imagen del producto.";
     }
     if (log.action === "PRODUCT_DELETE") {
       return "Se elimino el producto del listado activo.";
@@ -484,6 +498,54 @@ export default function Home() {
       setError(text);
     } finally {
       setUploadingImageProductId(null);
+    }
+  }
+
+  async function deleteProductImage(productId: string, imageId: string) {
+    setPhotoBusyImageId(imageId);
+    setMessage("");
+    setError("");
+    try {
+      const response = await authFetch(`/api/products/${productId}/images/${imageId}`, {
+        method: "DELETE",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error ?? "No se pudo eliminar la imagen");
+      }
+      setMessage("Imagen eliminada.");
+      await loadData();
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "Error al eliminar imagen";
+      setError(text);
+    } finally {
+      setPhotoBusyImageId(null);
+    }
+  }
+
+  async function replaceProductImage(productId: string, imageId: string, file: File | null) {
+    if (!file) return;
+    setPhotoBusyImageId(imageId);
+    setMessage("");
+    setError("");
+    try {
+      const payload = new FormData();
+      payload.set("image", file);
+      const response = await authFetch(`/api/products/${productId}/images/${imageId}`, {
+        method: "PUT",
+        body: payload,
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error ?? "No se pudo reemplazar la imagen");
+      }
+      setMessage("Imagen reemplazada.");
+      await loadData();
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "Error al reemplazar imagen";
+      setError(text);
+    } finally {
+      setPhotoBusyImageId(null);
     }
   }
 
@@ -1000,9 +1062,11 @@ export default function Home() {
                           <line x1="14" y1="11" x2="14" y2="17"></line>
                         </svg>
                       </button>
-                      <label
-                        className="btn flex h-12 w-12 cursor-pointer items-center justify-center p-0"
-                        title={uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
+                      <button
+                        type="button"
+                        className="btn flex h-12 w-12 items-center justify-center p-0"
+                        title="Gestionar fotos"
+                        onClick={() => setManagingPhotosProductId(product.id)}
                       >
                         <svg
                           viewBox="0 0 24 24"
@@ -1017,20 +1081,10 @@ export default function Home() {
                           <rect x="3" y="6" width="18" height="12" rx="2"></rect>
                           <circle cx="9" cy="12" r="1.5"></circle>
                           <path d="m21 15-4-4-5 5"></path>
+                          <path d="M12 10v4"></path>
+                          <path d="M10 12h4"></path>
                         </svg>
-                        <input
-                          type="file"
-                          className="hidden"
-                          accept="image/*"
-                          multiple
-                          disabled={uploadingImageProductId === product.id}
-                          onChange={(event) => {
-                            const files = Array.from(event.target.files ?? []);
-                            event.target.value = "";
-                            void addImagesToProduct(product.id, files);
-                          }}
-                        />
-                      </label>
+                      </button>
                     </div>
                     {isEditing ? (
                       <div className="mt-3 space-y-2">
@@ -1281,21 +1335,13 @@ export default function Home() {
                             >
                               Cancelar
                             </button>
-                            <label className="btn min-w-[8rem] cursor-pointer text-center">
-                              {uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
-                              <input
-                                type="file"
-                                className="hidden"
-                                accept="image/*"
-                                multiple
-                                disabled={uploadingImageProductId === product.id}
-                                onChange={(event) => {
-                                  const files = Array.from(event.target.files ?? []);
-                                  event.target.value = "";
-                                  void addImagesToProduct(product.id, files);
-                                }}
-                              />
-                            </label>
+                            <button
+                              type="button"
+                              className="btn min-w-[8rem] text-center"
+                              onClick={() => setManagingPhotosProductId(product.id)}
+                            >
+                              Gestionar fotos
+                            </button>
                           </div>
                         ) : (
                           <div className="flex flex-wrap justify-center gap-2">
@@ -1342,9 +1388,11 @@ export default function Home() {
                                 <line x1="14" y1="11" x2="14" y2="17"></line>
                               </svg>
                             </button>
-                            <label
-                              className="btn flex h-12 w-12 cursor-pointer items-center justify-center p-0"
-                              title={uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
+                            <button
+                              type="button"
+                              className="btn flex h-12 w-12 items-center justify-center p-0"
+                              title="Gestionar fotos"
+                              onClick={() => setManagingPhotosProductId(product.id)}
                             >
                               <svg
                                 viewBox="0 0 24 24"
@@ -1359,20 +1407,10 @@ export default function Home() {
                                 <rect x="3" y="6" width="18" height="12" rx="2"></rect>
                                 <circle cx="9" cy="12" r="1.5"></circle>
                                 <path d="m21 15-4-4-5 5"></path>
+                                <path d="M12 10v4"></path>
+                                <path d="M10 12h4"></path>
                               </svg>
-                              <input
-                                type="file"
-                                className="hidden"
-                                accept="image/*"
-                                multiple
-                                disabled={uploadingImageProductId === product.id}
-                                onChange={(event) => {
-                                  const files = Array.from(event.target.files ?? []);
-                                  event.target.value = "";
-                                  void addImagesToProduct(product.id, files);
-                                }}
-                              />
-                            </label>
+                            </button>
                           </div>
                         )}
                       </td>
@@ -1766,6 +1804,109 @@ export default function Home() {
           </table>
         </div>
       </section>
+
+      {managingPhotosProduct ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3"
+          onClick={() => setManagingPhotosProductId(null)}
+        >
+          <div
+            className="panel flex max-h-[88vh] w-full max-w-4xl flex-col bg-white p-4"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold">Gestionar fotos</h3>
+                <p className="text-sm text-[var(--muted)]">{managingPhotosProduct.name}</p>
+              </div>
+              <button type="button" className="btn" onClick={() => setManagingPhotosProductId(null)}>
+                Cerrar
+              </button>
+            </div>
+
+            <div className="space-y-4 overflow-y-auto pr-1">
+              <div className="rounded-lg border border-[var(--line)] p-3">
+                <p className="mb-2 text-sm font-semibold">Agregar nuevas fotos</p>
+                <label className="btn cursor-pointer">
+                  {uploadingImageProductId === managingPhotosProduct.id ? "Subiendo..." : "Seleccionar fotos"}
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    multiple
+                    disabled={uploadingImageProductId === managingPhotosProduct.id}
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files ?? []);
+                      event.target.value = "";
+                      void addImagesToProduct(managingPhotosProduct.id, files);
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {(managingPhotosProduct.product_images ?? []).map((image, index) => {
+                  const imageUrl = getImageUrl(image.path);
+                  const busy = photoBusyImageId === image.id;
+                  return (
+                    <div key={image.id} className="rounded-lg border border-[var(--line)] p-2">
+                      <button
+                        type="button"
+                        className="group relative block w-full"
+                        onClick={() =>
+                          openImageViewer(
+                            (managingPhotosProduct.product_images ?? []).map((item) => item.path),
+                            index,
+                          )
+                        }
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={imageUrl}
+                          alt={`${managingPhotosProduct.name} ${index + 1}`}
+                          className="h-40 w-full rounded-lg border border-[var(--line)] object-cover"
+                        />
+                        <span className="absolute inset-0 hidden items-center justify-center rounded-lg bg-black/35 text-white group-hover:flex">
+                          Ver
+                        </span>
+                      </button>
+                      <p className="mt-2 truncate text-xs text-[var(--muted)]">{image.path}</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <label className="btn cursor-pointer">
+                          {busy ? "Procesando..." : "Reemplazar"}
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept="image/*"
+                            disabled={busy}
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] ?? null;
+                              event.target.value = "";
+                              void replaceProductImage(managingPhotosProduct.id, image.id, file);
+                            }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          disabled={busy}
+                          onClick={() => void deleteProductImage(managingPhotosProduct.id, image.id)}
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {!(managingPhotosProduct.product_images ?? []).length ? (
+                <p className="text-sm text-[var(--muted)]">Este producto todavia no tiene fotos.</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {selectedAudit ? (
         <div

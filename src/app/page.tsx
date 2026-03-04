@@ -39,6 +39,19 @@ type EditMovementState = {
   requested_by: string;
 };
 
+type RestorePoint = {
+  id: string;
+  label: string;
+  created_at: string;
+  created_by_email: string | null;
+  counts: {
+    products: number;
+    product_images: number;
+    movements: number;
+    audit_logs: number;
+  };
+};
+
 const initialProductForm: ProductFormState = {
   name: "",
   category: "",
@@ -108,6 +121,13 @@ export default function Home() {
   const [selectedAudit, setSelectedAudit] = useState<AuditLog | null>(null);
   const [highlightProductId, setHighlightProductId] = useState<string | null>(null);
   const [highlightMovementId, setHighlightMovementId] = useState<string | null>(null);
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
+  const [restoreMode, setRestoreMode] = useState<"POINT" | "WEEK">("WEEK");
+  const [restorePoints, setRestorePoints] = useState<RestorePoint[]>([]);
+  const [selectedRestorePointId, setSelectedRestorePointId] = useState<string | null>(null);
+  const [loadingRestorePoints, setLoadingRestorePoints] = useState(false);
+  const [creatingRestorePoint, setCreatingRestorePoint] = useState(false);
+  const [restoringPointId, setRestoringPointId] = useState<string | null>(null);
   const [managingPhotosProductId, setManagingPhotosProductId] = useState<string | null>(null);
   const [photoBusyImageId, setPhotoBusyImageId] = useState<string | null>(null);
   const productsSectionRef = useRef<HTMLElement | null>(null);
@@ -151,6 +171,8 @@ export default function Home() {
       PRODUCT_ADD_IMAGES: "Se agregaron fotos",
       PRODUCT_DELETE_IMAGE: "Se elimino foto",
       PRODUCT_REPLACE_IMAGE: "Se reemplazo foto",
+      RESTORE_POINT_CREATE: "Se creo punto de restauracion",
+      RESTORE_POINT_APPLY: "Se aplico restauracion",
       MOVEMENT_CREATE: "Se registro movimiento",
       MOVEMENT_UPDATE: "Se modifico movimiento",
       MOVEMENT_DELETE: "Se elimino movimiento",
@@ -195,6 +217,12 @@ export default function Home() {
     if (log.action === "PRODUCT_REPLACE_IMAGE") {
       return "Se reemplazo una imagen del producto.";
     }
+    if (log.action === "RESTORE_POINT_CREATE") {
+      return "Se creo un punto de restauracion manual.";
+    }
+    if (log.action === "RESTORE_POINT_APPLY") {
+      return "Se restauro la base de datos a un punto previo.";
+    }
     if (log.action === "PRODUCT_DELETE") {
       return "Se elimino el producto del listado activo.";
     }
@@ -223,6 +251,18 @@ export default function Home() {
     const headers = new Headers(init?.headers ?? {});
     headers.set("Authorization", `Bearer ${token}`);
     return fetch(input, { ...init, headers });
+  }
+
+  async function readApiPayload(response: Response): Promise<Record<string, unknown>> {
+    const contentType = response.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return (await response.json()) as Record<string, unknown>;
+    }
+
+    const text = await response.text();
+    throw new Error(
+      `La API devolvio un formato invalido (no JSON). Verifica que la ruta exista y este desplegada. Detalle: ${text.slice(0, 120)}`,
+    );
   }
 
   async function loadData() {
@@ -641,6 +681,136 @@ export default function Home() {
     }
   }
 
+  async function loadRestorePoints() {
+    setLoadingRestorePoints(true);
+    setError("");
+    try {
+      const response = await authFetch("/api/restore-points", { cache: "no-store" });
+      const result = await readApiPayload(response);
+      if (!response.ok) {
+        throw new Error(String(result.error ?? "No se pudieron cargar los puntos"));
+      }
+      const points = (result.data as RestorePoint[] | undefined) ?? [];
+      setRestorePoints(points);
+      setSelectedRestorePointId((prev) => {
+        if (prev && points.some((point) => point.id === prev)) return prev;
+        const firstValid = points.find(
+          (point) => !(point.counts.products === 0 && point.counts.movements === 0),
+        );
+        return firstValid?.id ?? null;
+      });
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "Error al cargar puntos de restauracion";
+      setError(text);
+    } finally {
+      setLoadingRestorePoints(false);
+    }
+  }
+
+  async function createRestorePoint() {
+    setCreatingRestorePoint(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await authFetch("/api/restore-points", { method: "POST" });
+      const result = await readApiPayload(response);
+      if (!response.ok) {
+        throw new Error(String(result.error ?? "No se pudo crear el punto"));
+      }
+      setMessage("Punto de restauracion creado.");
+      await loadRestorePoints();
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "Error al crear punto de restauracion";
+      setError(text);
+    } finally {
+      setCreatingRestorePoint(false);
+    }
+  }
+
+  async function restoreToPoint(pointId: string) {
+    setRestoringPointId(pointId);
+    setError("");
+    setMessage("");
+    try {
+      const response = await authFetch(`/api/restore-points/${pointId}/restore`, {
+        method: "POST",
+      });
+      const result = await readApiPayload(response);
+      if (!response.ok) {
+        throw new Error(String(result.error ?? "No se pudo restaurar"));
+      }
+      setMessage("Restauracion completada.");
+      setRestoreModalOpen(false);
+      await loadData();
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "Error al restaurar";
+      setError(text);
+    } finally {
+      setRestoringPointId(null);
+    }
+  }
+
+  async function openRestoreModal() {
+    setRestoreMode("WEEK");
+    setSelectedRestorePointId(null);
+    setRestoreModalOpen(true);
+    await loadRestorePoints();
+  }
+
+  function getWeekAgoTargetPoint() {
+    if (!restorePoints.length) return null;
+    const cutoffTime = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const sorted = [...restorePoints].sort(
+      (a, b) =>
+        Math.abs(new Date(a.created_at).getTime() - cutoffTime) -
+        Math.abs(new Date(b.created_at).getTime() - cutoffTime),
+    );
+    return sorted[0] ?? null;
+  }
+
+  async function applyRestoreSelection() {
+    if (restoreMode === "POINT") {
+      if (!selectedRestorePointId) {
+        setError("Selecciona un punto de restauracion.");
+        return;
+      }
+      const point = restorePoints.find((item) => item.id === selectedRestorePointId);
+      if (!point) {
+        setError("El punto seleccionado ya no existe.");
+        return;
+      }
+      if (point.counts.products === 0 && point.counts.movements === 0) {
+        setError("Este punto esta vacio. Elige otro punto.");
+        return;
+      }
+      const ok = window.confirm(
+        `Restaurar al punto "${point.label}" (${new Date(point.created_at).toLocaleString()})?\n` +
+          `Contenido: ${point.counts.products} productos, ${point.counts.movements} movimientos.`,
+      );
+      if (!ok) return;
+      await restoreToPoint(point.id);
+      return;
+    }
+
+    const target = getWeekAgoTargetPoint();
+    if (!target) {
+      setError("No hay puntos de restauracion en la ultima semana.");
+      return;
+    }
+    if (target.counts.products === 0 && target.counts.movements === 0) {
+      setError("El punto mas cercano a una semana atras esta vacio. Elige otro punto.");
+      return;
+    }
+    const ok = window.confirm(
+      `Se restaurara al punto mas cercano a 1 semana atras:\n` +
+        `${target.label} (${new Date(target.created_at).toLocaleString()}).\n` +
+        `Contenido: ${target.counts.products} productos, ${target.counts.movements} movimientos.\n` +
+        `Deseas continuar?`,
+    );
+    if (!ok) return;
+    await restoreToPoint(target.id);
+  }
+
   function openImageViewer(paths: string[], startAt: number) {
     const urls = paths.map((path) => getImageUrl(path)).filter(Boolean);
     if (!urls.length) return;
@@ -832,9 +1002,32 @@ export default function Home() {
               </p>
             </label>
 
-            <button className="btn btn-primary w-fit" disabled={submittingProduct} type="submit">
-              {submittingProduct ? "Guardando..." : "Guardar producto"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button className="btn btn-primary w-fit" disabled={submittingProduct} type="submit">
+                {submittingProduct ? "Guardando..." : "Guardar producto"}
+              </button>
+              {movementDeleteMode ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn w-fit bg-violet-600 text-white hover:bg-violet-700"
+                    onClick={() => void createRestorePoint()}
+                    disabled={creatingRestorePoint}
+                    title="Guardar punto de restauracion actual"
+                  >
+                    {creatingRestorePoint ? "Creando punto..." : "Crear punto"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn w-fit bg-violet-600 text-white hover:bg-violet-700"
+                    onClick={() => void openRestoreModal()}
+                    title="Ver y aplicar puntos de restauracion de los ultimos 7 dias"
+                  >
+                    Restaurar
+                  </button>
+                </>
+              ) : null}
+            </div>
           </form>
         </article>
 
@@ -1903,6 +2096,146 @@ export default function Home() {
               {!(managingPhotosProduct.product_images ?? []).length ? (
                 <p className="text-sm text-[var(--muted)]">Este producto todavia no tiene fotos.</p>
               ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {restoreModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3"
+          onClick={() => setRestoreModalOpen(false)}
+        >
+          <div
+            className="panel w-full max-w-3xl bg-white p-4"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="text-lg font-semibold">Restaurar datos</h3>
+                <p className="text-sm text-[var(--muted)]">
+                  Elige como deseas restaurar: 1 semana atras o uno de tus 2 ultimos puntos.
+                </p>
+              </div>
+              <button type="button" className="btn" onClick={() => setRestoreModalOpen(false)}>
+                Cerrar
+              </button>
+            </div>
+
+            <div className="mb-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className={`btn ${restoreMode === "POINT" ? "btn-primary" : ""}`}
+                onClick={() => setRestoreMode("POINT")}
+              >
+                Usar punto de restauracion
+              </button>
+              <button
+                type="button"
+                className={`btn ${restoreMode === "WEEK" ? "btn-primary" : ""}`}
+                onClick={() => setRestoreMode("WEEK")}
+              >
+                Usar 1 semana atras
+              </button>
+            </div>
+
+            <div className="mb-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={creatingRestorePoint}
+                onClick={() => void createRestorePoint()}
+              >
+                {creatingRestorePoint ? "Creando punto..." : "Crear punto ahora"}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={loadingRestorePoints}
+                onClick={() => void loadRestorePoints()}
+              >
+                {loadingRestorePoints ? "Actualizando..." : "Actualizar lista"}
+              </button>
+            </div>
+
+            {restoreMode === "POINT" ? (
+              <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-[var(--line)]">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Seleccion</th>
+                      <th className="px-3 py-2 text-left">Punto</th>
+                      <th className="px-3 py-2 text-left">Fecha</th>
+                      <th className="px-3 py-2 text-left">Usuario</th>
+                      <th className="px-3 py-2 text-left">Contenido</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {restorePoints.map((point) => (
+                      <tr key={point.id} className="border-t border-[var(--line)]">
+                        <td className="px-3 py-2">
+                          <input
+                            type="radio"
+                            name="restore-point"
+                            checked={selectedRestorePointId === point.id}
+                            disabled={point.counts.products === 0 && point.counts.movements === 0}
+                            onChange={() => setSelectedRestorePointId(point.id)}
+                          />
+                        </td>
+                        <td className="px-3 py-2">{point.label}</td>
+                        <td className="px-3 py-2">{new Date(point.created_at).toLocaleString()}</td>
+                        <td className="px-3 py-2">{point.created_by_email ?? "-"}</td>
+                        <td className="px-3 py-2 text-xs">
+                          P:{point.counts.products} / M:{point.counts.movements}
+                        </td>
+                      </tr>
+                    ))}
+                    {!restorePoints.length && !loadingRestorePoints ? (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-4 text-center text-[var(--muted)]">
+                          No hay puntos en la ultima semana.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-[var(--line)] bg-slate-50 p-3 text-sm">
+                <p className="mb-2">
+                  Se usara el punto mas cercano a hace 1 semana:
+                  <b> {new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleString()}</b>.
+                </p>
+                <p className="mb-3 text-[var(--muted)]">
+                  Si el punto mas cercano esta vacio, el sistema bloqueara la restauracion.
+                </p>
+                {(() => {
+                  const target = getWeekAgoTargetPoint();
+                  if (!target) {
+                    return <p className="text-[var(--muted)]">No hay punto disponible.</p>;
+                  }
+                  return (
+                    <p className="text-xs text-[var(--muted)]">
+                      Punto elegido: {target.label} ({new Date(target.created_at).toLocaleString()}) - P:
+                      {target.counts.products} / M:{target.counts.movements}
+                    </p>
+                  );
+                })()}
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button type="button" className="btn" onClick={() => setRestoreModalOpen(false)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={restoringPointId !== null}
+                onClick={() => void applyRestoreSelection()}
+              >
+                {restoringPointId ? "Restaurando..." : "Aceptar"}
+              </button>
             </div>
           </div>
         </div>

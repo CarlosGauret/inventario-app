@@ -28,7 +28,6 @@ Aplicativo web para control de inventarios con:
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `DELETE_ADMIN_EMAIL` (correo unico autorizado para eliminar)
-   - `DELETE_SECRET_KEY` (clave secreta para confirmar eliminaciones)
 
 ## 4. Ejecutar local
 ```bash

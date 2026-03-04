@@ -30,7 +30,7 @@ export async function PATCH(
 
     const { data: movement, error: movementError } = await supabase
       .from("movements")
-      .select("id, product_id, type, quantity")
+      .select("id, product_id, type, quantity, reason, requested_by, notes, created_at")
       .eq("id", id)
       .single();
 
@@ -109,10 +109,21 @@ export async function PATCH(
       entityType: "movement",
       entityId: id,
       detail: {
-        newType,
-        newQuantity,
-        newReason,
-        newRequestedBy,
+        before: {
+          type: movement.type,
+          quantity: movement.quantity,
+          reason: movement.reason,
+          requested_by: movement.requested_by,
+          notes: movement.notes,
+        },
+        after: {
+          type: newType,
+          quantity: newQuantity,
+          reason: newReason ?? movement.reason,
+          requested_by: newRequestedBy ?? movement.requested_by,
+          notes: newNotes ?? movement.notes,
+        },
+        product_id: movement.product_id,
       },
     });
 
@@ -139,7 +150,7 @@ export async function DELETE(
 
     const { data: movement, error: movementError } = await supabase
       .from("movements")
-      .select("id, product_id, type, quantity")
+      .select("id, product_id, type, quantity, reason, requested_by, notes, created_at")
       .eq("id", id)
       .single();
 
@@ -186,6 +197,9 @@ export async function DELETE(
       action: "MOVEMENT_DELETE",
       entityType: "movement",
       entityId: id,
+      detail: {
+        deleted_movement: movement,
+      },
     });
 
     return NextResponse.json({ ok: true });

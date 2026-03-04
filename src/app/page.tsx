@@ -432,30 +432,12 @@ export default function Home() {
     }
   }
 
-  async function deleteProduct(productId: string, productName: string) {
-    const confirmation = window.prompt(
-      `Vas a eliminar "${productName}". Escribe ELIMINAR para continuar.`,
-    );
-    if (confirmation !== "ELIMINAR") {
-      setError("Eliminacion cancelada: confirmacion incorrecta.");
-      return;
-    }
-    const secret = window.prompt("Ingresa tu clave secreta de eliminacion:");
-    if (!secret) {
-      setError("Eliminacion cancelada: falta clave secreta.");
-      return;
-    }
-
+  async function deleteProduct(productId: string) {
     setMessage("");
     setError("");
     try {
       const response = await authFetch(`/api/products/${productId}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          confirmation,
-          secret,
-        }),
       });
       const result = await response.json();
 
@@ -552,29 +534,11 @@ export default function Home() {
   }
 
   async function deleteMovement(movementId: string) {
-    const confirmation = window.prompt(
-      "Vas a eliminar este movimiento. Escribe ELIMINAR para continuar.",
-    );
-    if (confirmation !== "ELIMINAR") {
-      setError("Eliminacion cancelada: confirmacion incorrecta.");
-      return;
-    }
-    const secret = window.prompt("Ingresa tu clave secreta de eliminacion:");
-    if (!secret) {
-      setError("Eliminacion cancelada: falta clave secreta.");
-      return;
-    }
-
     setMessage("");
     setError("");
     try {
       const response = await authFetch(`/api/movements/${movementId}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          confirmation,
-          secret,
-        }),
       });
       const result = await response.json();
       if (!response.ok) {
@@ -588,6 +552,29 @@ export default function Home() {
       await loadData();
     } catch (cause) {
       const text = cause instanceof Error ? cause.message : "Error al eliminar movimiento";
+      setError(text);
+    }
+  }
+
+  async function deleteAuditLog(logId: string) {
+    setMessage("");
+    setError("");
+    try {
+      const response = await authFetch(`/api/audit-logs/${logId}`, {
+        method: "DELETE",
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error ?? "No se pudo eliminar el registro de auditoria");
+      }
+
+      if (selectedAudit?.id === logId) {
+        setSelectedAudit(null);
+      }
+      setMessage("Registro de auditoria eliminado.");
+      await loadData();
+    } catch (cause) {
+      const text = cause instanceof Error ? cause.message : "Error al eliminar auditoria";
       setError(text);
     }
   }
@@ -607,14 +594,42 @@ export default function Home() {
   function focusProduct(productId: string) {
     setCategoryFilter("ALL");
     setHighlightProductId(productId);
-    productsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => setHighlightProductId(null), 2200);
+    window.setTimeout(() => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>(`[data-product-anchor="${productId}"]`),
+      );
+      const target = candidates.find((el) => el.offsetParent !== null) ?? candidates[0];
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    window.setTimeout(() => setHighlightProductId(null), 10000);
   }
 
   function focusMovement(movementId: string) {
     setHighlightMovementId(movementId);
-    movementsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => setHighlightMovementId(null), 2200);
+    window.setTimeout(() => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>(`[data-movement-anchor="${movementId}"]`),
+      );
+      const target = candidates.find((el) => el.offsetParent !== null) ?? candidates[0];
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    window.setTimeout(() => setHighlightMovementId(null), 10000);
+  }
+
+  function goToAuditTarget(log: AuditLog) {
+    const movementId = getAuditMovementId(log);
+    if (movementId) {
+      focusMovement(movementId);
+      return true;
+    }
+
+    const productId = getAuditProductId(log);
+    if (productId) {
+      focusProduct(productId);
+      return true;
+    }
+
+    return false;
   }
 
   async function signOut() {
@@ -633,7 +648,7 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto max-w-6xl p-4 md:p-8">
+    <main className="mx-auto w-full max-w-none p-4 md:p-8">
       <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight md:text-3xl">
@@ -659,8 +674,8 @@ export default function Home() {
       {message ? <p className="mb-3 rounded-lg bg-emerald-100 p-2 text-sm">{message}</p> : null}
       {error ? <p className="mb-3 rounded-lg bg-red-100 p-2 text-sm text-red-800">{error}</p> : null}
 
-      <section className="grid gap-4 md:grid-cols-2">
-        <article className="panel p-4">
+      <section className="grid items-stretch gap-5 lg:grid-cols-2">
+        <article className="panel h-full p-5">
           <h2 className="mb-3 text-lg font-semibold">Registrar producto</h2>
           <form className="space-y-3" onSubmit={onSubmitProduct}>
             <div className="grid gap-3">
@@ -669,6 +684,7 @@ export default function Home() {
                 <input
                   className="field mt-1"
                   value={productForm.name}
+                  placeholder="Ejemplo: Tomatodos Negros de 500ml"
                   onChange={(event) =>
                     setProductForm((prev) => ({ ...prev, name: event.target.value }))
                   }
@@ -683,16 +699,18 @@ export default function Home() {
                 <input
                   className="field mt-1"
                   value={productForm.category}
+                  placeholder="Ejemplo: Lapiceros"
                   onChange={(event) =>
                     setProductForm((prev) => ({ ...prev, category: event.target.value }))
                   }
                 />
               </label>
               <label>
-                Ubicacion
+                Ubicación
                 <input
                   className="field mt-1"
                   value={productForm.location}
+                  placeholder="Ejemplo: 9° Piso o Almacen"
                   onChange={(event) =>
                     setProductForm((prev) => ({ ...prev, location: event.target.value }))
                   }
@@ -752,13 +770,13 @@ export default function Home() {
               </p>
             </label>
 
-            <button className="btn btn-primary" disabled={submittingProduct} type="submit">
+            <button className="btn btn-primary w-fit" disabled={submittingProduct} type="submit">
               {submittingProduct ? "Guardando..." : "Guardar producto"}
             </button>
           </form>
         </article>
 
-        <article className="panel p-4">
+        <article className="panel h-full p-5">
           <h2 className="mb-3 text-lg font-semibold">Registrar movimiento</h2>
           <form className="space-y-3" onSubmit={onSubmitMovement}>
             <label>
@@ -821,7 +839,7 @@ export default function Home() {
                 onChange={(event) =>
                   setMovementForm((prev) => ({ ...prev, reason: event.target.value }))
                 }
-                placeholder="Ejemplo: mantenimiento de bomba"
+                placeholder="Ejemplo: Explosion Creativa"
                 required
               />
             </label>
@@ -850,22 +868,25 @@ export default function Home() {
               />
             </label>
 
-            <button className="btn btn-primary" disabled={submittingMovement} type="submit">
+            <button className="btn btn-primary w-fit" disabled={submittingMovement} type="submit">
               {submittingMovement ? "Registrando..." : "Guardar movimiento"}
             </button>
           </form>
         </article>
       </section>
 
-      <section className="mt-5 grid gap-4 lg:grid-cols-2">
-        <article className="panel overflow-hidden" ref={productsSectionRef}>
+      <section className="mt-5 grid items-stretch gap-5 lg:grid-cols-2">
+        <article
+          className="panel flex min-h-[560px] flex-col overflow-hidden"
+          ref={productsSectionRef}
+        >
           <div className="border-b border-[var(--line)] p-4">
             <h2 className="text-lg font-semibold">Productos</h2>
-            <div className="mt-3 flex items-center gap-2 text-sm">
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
               <label htmlFor="category-filter">Filtrar por categoria:</label>
               <select
                 id="category-filter"
-                className="field max-w-xs"
+                className="field min-w-[13rem] flex-1 md:max-w-sm"
                 value={categoryFilter}
                 onChange={(event) => setCategoryFilter(event.target.value)}
               >
@@ -878,7 +899,7 @@ export default function Home() {
               </select>
             </div>
           </div>
-          <div className="overflow-x-auto">
+          <div className="flex-1 overflow-x-auto">
             <div className="space-y-3 p-3 sm:hidden">
               {visibleProducts.map((product) => {
                 const paths = product.product_images?.map((image) => image.path) ?? [];
@@ -889,6 +910,7 @@ export default function Home() {
                 return (
                   <div
                     key={product.id}
+                    data-product-anchor={product.id}
                     className={`rounded-lg border p-3 ${
                       highlightProductId === product.id
                         ? "border-emerald-400 bg-emerald-50"
@@ -923,26 +945,79 @@ export default function Home() {
                     </div>
                     <p className="text-sm">
                       Stock:{" "}
-                      <span className={`badge ${low ? "bg-red-100 text-red-800" : ""}`}>
+                      <span
+                        className={`inline-flex min-w-[2.7rem] items-center justify-center rounded-full border border-[var(--line)] px-2.5 py-0.5 text-2xl font-bold leading-none ${
+                          low ? "bg-red-100 text-red-800" : "bg-white text-[var(--foreground)]"
+                        }`}
+                      >
                         {product.stock}
                       </span>{" "}
                       <span className="text-xs text-[var(--muted)]">Min: {product.min_stock}</span>
                     </p>
-                    <p className="text-sm">Ubicacion: {product.location ?? "-"}</p>
+                    <p className="text-sm">Ubicación: {product.location ?? "-"}</p>
 
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <button type="button" className="btn" onClick={() => startEditProduct(product)}>
-                        Editar
+                      <button
+                        type="button"
+                        className="btn flex h-12 w-12 items-center justify-center p-0"
+                        title="Editar"
+                        onClick={() => startEditProduct(product)}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-7 w-7"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12 20h9"></path>
+                          <path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"></path>
+                        </svg>
                       </button>
                       <button
                         type="button"
-                        className="btn btn-danger"
-                        onClick={() => void deleteProduct(product.id, product.name)}
+                        className="btn btn-danger flex h-12 w-12 items-center justify-center p-0"
+                        title="Eliminar"
+                        onClick={() => void deleteProduct(product.id)}
                       >
-                        Eliminar
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-7 w-7"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <polyline points="3 6 5 6 21 6"></polyline>
+                          <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path>
+                          <path d="m19 6-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"></path>
+                          <line x1="10" y1="11" x2="10" y2="17"></line>
+                          <line x1="14" y1="11" x2="14" y2="17"></line>
+                        </svg>
                       </button>
-                      <label className="btn cursor-pointer">
-                        {uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
+                      <label
+                        className="btn flex h-12 w-12 cursor-pointer items-center justify-center p-0"
+                        title={uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          className="h-7 w-7"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <rect x="3" y="6" width="18" height="12" rx="2"></rect>
+                          <circle cx="9" cy="12" r="1.5"></circle>
+                          <path d="m21 15-4-4-5 5"></path>
+                        </svg>
                         <input
                           type="file"
                           className="hidden"
@@ -992,7 +1067,7 @@ export default function Home() {
                           onChange={(event) =>
                             setEditProduct((prev) => ({ ...prev, location: event.target.value }))
                           }
-                          placeholder="Ubicacion"
+                          placeholder="Ubicación"
                         />
                         <input
                           className="field"
@@ -1034,8 +1109,8 @@ export default function Home() {
                   <th className="px-3 py-2 text-left">Producto</th>
                   <th className="px-3 py-2 text-left">Categoria</th>
                   <th className="px-3 py-2 text-left">Stock</th>
-                  <th className="px-3 py-2 text-left">Ubicacion</th>
-                  <th className="px-3 py-2 text-left">Acciones</th>
+                  <th className="px-3 py-2 text-center">Ubicación</th>
+                  <th className="w-[195px] px-4 py-2 text-center">Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -1048,6 +1123,7 @@ export default function Home() {
                   return (
                     <tr
                       key={product.id}
+                      data-product-anchor={product.id}
                       className={`border-t ${
                         highlightProductId === product.id ? "bg-emerald-50" : "border-[var(--line)]"
                       }`}
@@ -1113,7 +1189,23 @@ export default function Home() {
                           </>
                         )}
                       </td>
-                      <td className="px-3 py-2">{product.category ?? "-"}</td>
+                      <td className="px-3 py-2 text-center align-middle">
+                        {isEditing ? (
+                          <input
+                            className="field"
+                            value={editProduct.category}
+                            onChange={(event) =>
+                              setEditProduct((prev) => ({
+                                ...prev,
+                                category: event.target.value,
+                              }))
+                            }
+                            placeholder="Categoria"
+                          />
+                        ) : (
+                          product.category ?? "-"
+                        )}
+                      </td>
                       <td className="px-3 py-2">
                         {isEditing ? (
                           <div className="space-y-2">
@@ -1143,58 +1235,53 @@ export default function Home() {
                           </div>
                         ) : (
                           <>
-                            <span className={`badge ${low ? "bg-red-100 text-red-800" : ""}`}>
+                            <span
+                              className={`inline-flex min-w-[2.7rem] items-center justify-center rounded-full border border-[var(--line)] px-2.5 py-0.5 text-2xl font-bold leading-none ${
+                                low ? "bg-red-100 text-red-800" : "bg-white text-[var(--foreground)]"
+                              }`}
+                            >
                               {product.stock}
                             </span>
                             <p className="mt-1 text-xs text-[var(--muted)]">Min: {product.min_stock}</p>
                           </>
                         )}
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 text-center align-middle whitespace-nowrap">
                         {isEditing ? (
-                          <div className="space-y-2">
-                            <input
-                              className="field"
-                              value={editProduct.location}
-                              onChange={(event) =>
-                                setEditProduct((prev) => ({
-                                  ...prev,
-                                  location: event.target.value,
-                                }))
-                              }
-                              placeholder="Ubicacion"
-                            />
-                            <input
-                              className="field"
-                              value={editProduct.category}
-                              onChange={(event) =>
-                                setEditProduct((prev) => ({
-                                  ...prev,
-                                  category: event.target.value,
-                                }))
-                              }
-                              placeholder="Categoria"
-                            />
-                          </div>
+                          <input
+                            className="field text-center"
+                            value={editProduct.location}
+                            onChange={(event) =>
+                              setEditProduct((prev) => ({
+                                ...prev,
+                                location: event.target.value,
+                              }))
+                            }
+                            placeholder="Ubicación"
+                          />
                         ) : (
                           product.location ?? "-"
                         )}
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-4 py-2 align-middle">
                         {isEditing ? (
-                          <div className="flex flex-wrap gap-2">
+                          <div className="flex flex-col items-center gap-2">
                             <button
                               type="button"
-                              className="btn btn-primary"
+                              className="btn btn-primary min-w-[8rem] text-center"
                               disabled={savingEdit}
                               onClick={() => void saveEditProduct(product.id)}
                             >
                               Guardar
                             </button>
-                            <button type="button" className="btn" onClick={cancelEditProduct}>
+                            <button
+                              type="button"
+                              className="btn min-w-[8rem] text-center"
+                              onClick={cancelEditProduct}
+                            >
                               Cancelar
                             </button>
-                            <label className="btn cursor-pointer">
+                            <label className="btn min-w-[8rem] cursor-pointer text-center">
                               {uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
                               <input
                                 type="file"
@@ -1211,23 +1298,68 @@ export default function Home() {
                             </label>
                           </div>
                         ) : (
-                          <div className="flex flex-wrap gap-2">
+                          <div className="flex flex-wrap justify-center gap-2">
                             <button
                               type="button"
-                              className="btn"
+                              className="btn flex h-12 w-12 items-center justify-center p-0"
+                              title="Editar"
                               onClick={() => startEditProduct(product)}
                             >
-                              Editar
+                              <svg
+                                viewBox="0 0 24 24"
+                                className="h-7 w-7"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <path d="M12 20h9"></path>
+                                <path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"></path>
+                              </svg>
                             </button>
                             <button
                               type="button"
-                              className="btn btn-danger"
-                              onClick={() => void deleteProduct(product.id, product.name)}
+                              className="btn btn-danger flex h-12 w-12 items-center justify-center p-0"
+                              title="Eliminar"
+                              onClick={() => void deleteProduct(product.id)}
                             >
-                              Eliminar
+                              <svg
+                                viewBox="0 0 24 24"
+                                className="h-7 w-7"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path>
+                                <path d="m19 6-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"></path>
+                                <line x1="10" y1="11" x2="10" y2="17"></line>
+                                <line x1="14" y1="11" x2="14" y2="17"></line>
+                              </svg>
                             </button>
-                            <label className="btn cursor-pointer">
-                              {uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
+                            <label
+                              className="btn flex h-12 w-12 cursor-pointer items-center justify-center p-0"
+                              title={uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                className="h-7 w-7"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                aria-hidden="true"
+                              >
+                                <rect x="3" y="6" width="18" height="12" rx="2"></rect>
+                                <circle cx="9" cy="12" r="1.5"></circle>
+                                <path d="m21 15-4-4-5 5"></path>
+                              </svg>
                               <input
                                 type="file"
                                 className="hidden"
@@ -1259,17 +1391,21 @@ export default function Home() {
           </div>
         </article>
 
-        <article className="panel overflow-hidden" ref={movementsSectionRef}>
+        <article
+          className="panel flex min-h-[560px] flex-col overflow-hidden"
+          ref={movementsSectionRef}
+        >
           <div className="border-b border-[var(--line)] p-4">
             <h2 className="text-lg font-semibold">Historial de movimientos</h2>
           </div>
-          <div className="overflow-x-auto">
+          <div className="flex-1 overflow-x-auto">
             <div className="space-y-3 p-3 sm:hidden">
               {movements.map((movement) => {
                 const isEditing = editingMovementId === movement.id;
                 return (
                   <div
                     key={movement.id}
+                    data-movement-anchor={movement.id}
                     className={`rounded-lg border p-3 ${
                       highlightMovementId === movement.id
                         ? "border-amber-400 bg-amber-50"
@@ -1294,15 +1430,13 @@ export default function Home() {
                       >
                         Editar
                       </button>
-                      {movementDeleteMode ? (
-                        <button
-                          type="button"
-                          className="btn btn-danger"
-                          onClick={() => void deleteMovement(movement.id)}
-                        >
-                          Eliminar
-                        </button>
-                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        onClick={() => void deleteMovement(movement.id)}
+                      >
+                        Eliminar
+                      </button>
                     </div>
                     {isEditing ? (
                       <div className="mt-2 space-y-2">
@@ -1386,6 +1520,7 @@ export default function Home() {
                   return (
                     <tr
                       key={movement.id}
+                      data-movement-anchor={movement.id}
                       className={`border-t ${
                         highlightMovementId === movement.id ? "bg-amber-50" : "border-[var(--line)]"
                       }`}
@@ -1497,15 +1632,13 @@ export default function Home() {
                             >
                               Editar
                             </button>
-                            {movementDeleteMode ? (
-                              <button
-                                type="button"
-                                className="btn btn-danger"
-                                onClick={() => void deleteMovement(movement.id)}
-                              >
-                                Eliminar
-                              </button>
-                            ) : null}
+                            <button
+                              type="button"
+                              className="btn btn-danger"
+                              onClick={() => void deleteMovement(movement.id)}
+                            >
+                              Eliminar
+                            </button>
                           </div>
                         )}
                       </td>
@@ -1541,9 +1674,30 @@ export default function Home() {
                 <p className="text-sm">Accion: {actionLabel(log.action)}</p>
                 <p className="text-sm">Entidad: {log.entity_type}</p>
                 <p className="mt-1 text-sm text-[var(--muted)]">{auditSummary(log)}</p>
-                <button type="button" className="btn mt-2" onClick={() => setSelectedAudit(log)}>
-                  Ver resumen
-                </button>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => {
+                      const ok = goToAuditTarget(log);
+                      if (!ok) {
+                        setSelectedAudit(log);
+                      }
+                    }}
+                  >
+                    Ver resumen
+                  </button>
+                  {movementDeleteMode ? (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      title="Eliminar registro de auditoria"
+                      onClick={() => void deleteAuditLog(log.id)}
+                    >
+                      Eliminar
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ))}
           </div>
@@ -1558,6 +1712,7 @@ export default function Home() {
                 <th className="px-3 py-2 text-left">Entidad</th>
                 <th className="px-3 py-2 text-left">ID</th>
                 <th className="px-3 py-2 text-left">Detalle</th>
+                {movementDeleteMode ? <th className="px-3 py-2 text-left">Eliminar</th> : null}
               </tr>
             </thead>
             <tbody>
@@ -1570,15 +1725,39 @@ export default function Home() {
                   <td className="px-3 py-2">{log.entity_type}</td>
                   <td className="px-3 py-2 text-xs">{log.entity_id ?? "-"}</td>
                   <td className="px-3 py-2">
-                    <button type="button" className="btn" onClick={() => setSelectedAudit(log)}>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        const ok = goToAuditTarget(log);
+                        if (!ok) {
+                          setSelectedAudit(log);
+                        }
+                      }}
+                    >
                       Ver
                     </button>
                   </td>
+                  {movementDeleteMode ? (
+                    <td className="px-3 py-2">
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        title="Eliminar registro de auditoria"
+                        onClick={() => void deleteAuditLog(log.id)}
+                      >
+                        Eliminar
+                      </button>
+                    </td>
+                  ) : null}
                 </tr>
               ))}
               {!auditLogs.length && !loading ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-4 text-center text-[var(--muted)]">
+                  <td
+                    colSpan={movementDeleteMode ? 8 : 7}
+                    className="px-3 py-4 text-center text-[var(--muted)]"
+                  >
                     Aun no hay registros de auditoria.
                   </td>
                 </tr>

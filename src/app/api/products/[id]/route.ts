@@ -26,6 +26,17 @@ export async function PATCH(
 
     const { id } = await params;
     const body = (await request.json()) as ProductUpdateInput;
+    const supabase = createServerClient();
+
+    const { data: beforeProduct, error: beforeError } = await supabase
+      .from("products")
+      .select("id, code, name, category, location, stock, min_stock, active")
+      .eq("id", id)
+      .single();
+
+    if (beforeError || !beforeProduct) {
+      return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
+    }
 
     const updateData: ProductUpdateInput = {};
     if (typeof body.code === "string") updateData.code = body.code.trim();
@@ -45,7 +56,6 @@ export async function PATCH(
       return NextResponse.json({ error: "Codigo y nombre no pueden estar vacios" }, { status: 400 });
     }
 
-    const supabase = createServerClient();
     const { error } = await supabase
       .from("products")
       .update(updateData)
@@ -56,12 +66,31 @@ export async function PATCH(
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
+    const afterProduct = {
+      code: updateData.code ?? beforeProduct.code,
+      name: updateData.name ?? beforeProduct.name,
+      category: updateData.category ?? beforeProduct.category,
+      location: updateData.location ?? beforeProduct.location,
+      stock: updateData.stock ?? beforeProduct.stock,
+      min_stock: updateData.min_stock ?? beforeProduct.min_stock,
+    };
+
     await writeAuditLog(supabase, {
       actor: auth.actor,
       action: "PRODUCT_UPDATE",
       entityType: "product",
       entityId: id,
-      detail: updateData as Record<string, unknown>,
+      detail: {
+        before: {
+          code: beforeProduct.code,
+          name: beforeProduct.name,
+          category: beforeProduct.category,
+          location: beforeProduct.location,
+          stock: beforeProduct.stock,
+          min_stock: beforeProduct.min_stock,
+        },
+        after: afterProduct,
+      },
     });
 
     return NextResponse.json({ ok: true });
@@ -141,7 +170,10 @@ export async function POST(
       action: "PRODUCT_ADD_IMAGES",
       entityType: "product",
       entityId: id,
-      detail: { imagesUploaded: files.length },
+      detail: {
+        imagesUploaded: files.length,
+        paths: insertedImages.map((item) => item.path),
+      },
     });
 
     return NextResponse.json({ ok: true });
@@ -180,6 +212,7 @@ export async function DELETE(
       action: "PRODUCT_DELETE",
       entityType: "product",
       entityId: id,
+      detail: { deleted_to_inactive: true },
     });
 
     return NextResponse.json({ ok: true });

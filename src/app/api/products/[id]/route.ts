@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
 import { randomUUID } from "crypto";
+import { requireActor } from "@/lib/server-auth";
+import { writeAuditLog } from "@/lib/audit";
+import { requireDeleteAuthorization } from "@/lib/delete-guard";
 
 const BUCKET = "products";
 
@@ -18,6 +21,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+
     const { id } = await params;
     const body = (await request.json()) as ProductUpdateInput;
 
@@ -50,6 +56,14 @@ export async function PATCH(
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
+    await writeAuditLog(supabase, {
+      actor: auth.actor,
+      action: "PRODUCT_UPDATE",
+      entityType: "product",
+      entityId: id,
+      detail: updateData as Record<string, unknown>,
+    });
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message =
@@ -63,6 +77,9 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+
     const { id } = await params;
     const formData = await request.formData();
     const rawFiles = formData.getAll("images");
@@ -119,6 +136,14 @@ export async function POST(
       return NextResponse.json({ error: imageError.message }, { status: 500 });
     }
 
+    await writeAuditLog(supabase, {
+      actor: auth.actor,
+      action: "PRODUCT_ADD_IMAGES",
+      entityType: "product",
+      entityId: id,
+      detail: { imagesUploaded: files.length },
+    });
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message =
@@ -128,10 +153,15 @@ export async function POST(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+    const guard = await requireDeleteAuthorization(request, auth.actor);
+    if (!guard.ok) return guard.response;
+
     const { id } = await params;
     const supabase = createServerClient();
 
@@ -144,6 +174,13 @@ export async function DELETE(
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
+
+    await writeAuditLog(supabase, {
+      actor: auth.actor,
+      action: "PRODUCT_DELETE",
+      entityType: "product",
+      entityId: id,
+    });
 
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
+import { requireActor } from "@/lib/server-auth";
+import { writeAuditLog } from "@/lib/audit";
 
 type MovementInput = {
   product_id: string;
@@ -10,8 +12,11 @@ type MovementInput = {
   notes?: string;
 };
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+
     const supabase = createServerClient();
     const { data, error } = await supabase
       .from("movements")
@@ -35,6 +40,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+
     const body = (await request.json()) as MovementInput;
 
     if (!body.product_id || !body.type || !body.reason || !(body.quantity > 0)) {
@@ -52,11 +60,25 @@ export async function POST(request: Request) {
       p_reason: body.reason.trim(),
       p_requested_by: body.requested_by?.trim() || null,
       p_notes: body.notes?.trim() || null,
+      p_created_by: auth.actor.id,
     });
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
+
+    await writeAuditLog(supabase, {
+      actor: auth.actor,
+      action: "MOVEMENT_CREATE",
+      entityType: "movement",
+      entityId: null,
+      detail: {
+        product_id: body.product_id,
+        type: body.type,
+        quantity: body.quantity,
+        reason: body.reason.trim(),
+      },
+    });
 
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -65,4 +87,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

@@ -28,3 +28,12 @@ export type Movement = {
   } | null;
 };
 
+export type AuditLog = {
+  id: string;
+  actor_email: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  detail: Record<string, unknown>;
+  created_at: string;
+};

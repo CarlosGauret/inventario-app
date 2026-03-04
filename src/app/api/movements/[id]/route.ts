@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
+import { requireActor } from "@/lib/server-auth";
+import { writeAuditLog } from "@/lib/audit";
+import { requireDeleteAuthorization } from "@/lib/delete-guard";
 
 type MovementUpdateInput = {
   type?: "ENTRY" | "EXIT";
@@ -18,6 +21,9 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+
     const { id } = await params;
     const body = (await request.json()) as MovementUpdateInput;
     const supabase = createServerClient();
@@ -97,6 +103,19 @@ export async function PATCH(
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
+    await writeAuditLog(supabase, {
+      actor: auth.actor,
+      action: "MOVEMENT_UPDATE",
+      entityType: "movement",
+      entityId: id,
+      detail: {
+        newType,
+        newQuantity,
+        newReason,
+        newRequestedBy,
+      },
+    });
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message =
@@ -106,10 +125,15 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+    const guard = await requireDeleteAuthorization(request, auth.actor);
+    if (!guard.ok) return guard.response;
+
     const { id } = await params;
     const supabase = createServerClient();
 
@@ -157,6 +181,13 @@ export async function DELETE(
       return NextResponse.json({ error: deleteError.message }, { status: 500 });
     }
 
+    await writeAuditLog(supabase, {
+      actor: auth.actor,
+      action: "MOVEMENT_DELETE",
+      entityType: "movement",
+      entityId: id,
+    });
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message =
@@ -164,4 +195,3 @@ export async function DELETE(
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

@@ -3,10 +3,9 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPublicClient } from "@/lib/supabase";
-import type { Movement, MovementType, Product } from "@/lib/types";
+import type { AuditLog, Movement, MovementType, Product } from "@/lib/types";
 
 type ProductFormState = {
-  code: string;
   name: string;
   category: string;
   location: string;
@@ -16,7 +15,6 @@ type ProductFormState = {
 };
 
 type EditProductState = {
-  code: string;
   name: string;
   category: string;
   location: string;
@@ -41,7 +39,6 @@ type EditMovementState = {
 };
 
 const initialProductForm: ProductFormState = {
-  code: "",
   name: "",
   category: "",
   location: "",
@@ -51,7 +48,6 @@ const initialProductForm: ProductFormState = {
 };
 
 const initialEditProduct: EditProductState = {
-  code: "",
   name: "",
   category: "",
   location: "",
@@ -88,6 +84,7 @@ export default function Home() {
   const supabase = useMemo(() => createPublicClient(), []);
   const [products, setProducts] = useState<Product[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [submittingProduct, setSubmittingProduct] = useState(false);
   const [submittingMovement, setSubmittingMovement] = useState(false);
@@ -105,23 +102,51 @@ export default function Home() {
   const [viewerIndex, setViewerIndex] = useState(0);
   const [authLoading, setAuthLoading] = useState(true);
   const [userEmail, setUserEmail] = useState<string>("");
+  const [movementDeleteMode, setMovementDeleteMode] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
 
   const lowStockCount = useMemo(
     () => products.filter((product) => product.stock <= product.min_stock).length,
     [products],
   );
 
+  const categoryOptions = useMemo(() => {
+    const unique = new Set(
+      products.map((product) => product.category?.trim()).filter((value): value is string => !!value),
+    );
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
+  const visibleProducts = useMemo(() => {
+    if (categoryFilter === "ALL") return products;
+    return products.filter((product) => (product.category ?? "") === categoryFilter);
+  }, [products, categoryFilter]);
+
+  async function authFetch(input: RequestInfo | URL, init?: RequestInit) {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      throw new Error("Sesion expirada. Vuelve a iniciar sesion.");
+    }
+
+    const headers = new Headers(init?.headers ?? {});
+    headers.set("Authorization", `Bearer ${token}`);
+    return fetch(input, { ...init, headers });
+  }
+
   async function loadData() {
     setLoading(true);
     setError("");
     try {
-      const [productsRes, movementsRes] = await Promise.all([
-        fetch("/api/products", { cache: "no-store" }),
-        fetch("/api/movements", { cache: "no-store" }),
+      const [productsRes, movementsRes, auditRes] = await Promise.all([
+        authFetch("/api/products", { cache: "no-store" }),
+        authFetch("/api/movements", { cache: "no-store" }),
+        authFetch("/api/audit-logs", { cache: "no-store" }),
       ]);
 
       const productsPayload = await productsRes.json();
       const movementsPayload = await movementsRes.json();
+      const auditPayload = await auditRes.json();
 
       if (!productsRes.ok) {
         throw new Error(productsPayload.error ?? "No se pudieron cargar productos");
@@ -129,9 +154,13 @@ export default function Home() {
       if (!movementsRes.ok) {
         throw new Error(movementsPayload.error ?? "No se pudieron cargar movimientos");
       }
+      if (!auditRes.ok) {
+        throw new Error(auditPayload.error ?? "No se pudo cargar auditoria");
+      }
 
       setProducts(productsPayload.data ?? []);
       setMovements(movementsPayload.data ?? []);
+      setAuditLogs(auditPayload.data ?? []);
     } catch (cause) {
       const text = cause instanceof Error ? cause.message : "Error al cargar datos";
       setError(text);
@@ -176,6 +205,28 @@ export default function Home() {
     };
   }, [router, supabase]);
 
+  useEffect(() => {
+    let armedAt = 0;
+    const windowMs = 3000;
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (!event.altKey) return;
+
+      if (event.code === "KeyI") {
+        armedAt = Date.now();
+        return;
+      }
+
+      if (event.code === "KeyP" && armedAt && Date.now() - armedAt <= windowMs) {
+        setMovementDeleteMode((prev) => !prev);
+        armedAt = 0;
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   async function onSubmitProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmittingProduct(true);
@@ -184,7 +235,6 @@ export default function Home() {
 
     try {
       const payload = new FormData();
-      payload.set("code", productForm.code.trim());
       payload.set("name", productForm.name.trim());
       payload.set("category", productForm.category.trim());
       payload.set("location", productForm.location.trim());
@@ -195,7 +245,7 @@ export default function Home() {
         payload.append("images", image);
       }
 
-      const response = await fetch("/api/products", {
+      const response = await authFetch("/api/products", {
         method: "POST",
         body: payload,
       });
@@ -223,7 +273,7 @@ export default function Home() {
     setError("");
 
     try {
-      const response = await fetch("/api/movements", {
+      const response = await authFetch("/api/movements", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -256,7 +306,6 @@ export default function Home() {
   function startEditProduct(product: Product) {
     setEditingProductId(product.id);
     setEditProduct({
-      code: product.code,
       name: product.name,
       category: product.category ?? "",
       location: product.location ?? "",
@@ -277,11 +326,10 @@ export default function Home() {
     setMessage("");
     setError("");
     try {
-      const response = await fetch(`/api/products/${productId}`, {
+      const response = await authFetch(`/api/products/${productId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          code: editProduct.code.trim(),
           name: editProduct.name.trim(),
           category: editProduct.category.trim(),
           location: editProduct.location.trim(),
@@ -308,16 +356,29 @@ export default function Home() {
   }
 
   async function deleteProduct(productId: string, productName: string) {
-    const accepted = window.confirm(
-      `Seguro que quieres eliminar "${productName}"? Se ocultara del listado.`,
+    const confirmation = window.prompt(
+      `Vas a eliminar "${productName}". Escribe ELIMINAR para continuar.`,
     );
-    if (!accepted) return;
+    if (confirmation !== "ELIMINAR") {
+      setError("Eliminacion cancelada: confirmacion incorrecta.");
+      return;
+    }
+    const secret = window.prompt("Ingresa tu clave secreta de eliminacion:");
+    if (!secret) {
+      setError("Eliminacion cancelada: falta clave secreta.");
+      return;
+    }
 
     setMessage("");
     setError("");
     try {
-      const response = await fetch(`/api/products/${productId}`, {
+      const response = await authFetch(`/api/products/${productId}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmation,
+          secret,
+        }),
       });
       const result = await response.json();
 
@@ -347,7 +408,7 @@ export default function Home() {
         payload.append("images", file);
       }
 
-      const response = await fetch(`/api/products/${productId}`, {
+      const response = await authFetch(`/api/products/${productId}`, {
         method: "POST",
         body: payload,
       });
@@ -388,7 +449,7 @@ export default function Home() {
     setMessage("");
     setError("");
     try {
-      const response = await fetch(`/api/movements/${movementId}`, {
+      const response = await authFetch(`/api/movements/${movementId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -414,16 +475,29 @@ export default function Home() {
   }
 
   async function deleteMovement(movementId: string) {
-    const accepted = window.confirm(
-      "Seguro que quieres eliminar este movimiento? El stock se ajustara automaticamente.",
+    const confirmation = window.prompt(
+      "Vas a eliminar este movimiento. Escribe ELIMINAR para continuar.",
     );
-    if (!accepted) return;
+    if (confirmation !== "ELIMINAR") {
+      setError("Eliminacion cancelada: confirmacion incorrecta.");
+      return;
+    }
+    const secret = window.prompt("Ingresa tu clave secreta de eliminacion:");
+    if (!secret) {
+      setError("Eliminacion cancelada: falta clave secreta.");
+      return;
+    }
 
     setMessage("");
     setError("");
     try {
-      const response = await fetch(`/api/movements/${movementId}`, {
+      const response = await authFetch(`/api/movements/${movementId}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmation,
+          secret,
+        }),
       });
       const result = await response.json();
       if (!response.ok) {
@@ -472,7 +546,9 @@ export default function Home() {
     <main className="mx-auto max-w-6xl p-4 md:p-8">
       <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Inventario Cloud TLS - Sede Arequipa</h1>
+          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">
+            Inventario Cloud TLS - Sede Arequipa
+          </h1>
           <p className="text-sm text-[var(--muted)]">
             Control de stock con trazabilidad de retiros, usos y cantidades.
           </p>
@@ -494,18 +570,7 @@ export default function Home() {
         <article className="panel p-4">
           <h2 className="mb-3 text-lg font-semibold">Registrar producto</h2>
           <form className="space-y-3" onSubmit={onSubmitProduct}>
-            <div className="grid gap-3 md:grid-cols-2">
-              <label>
-                Codigo
-                <input
-                  className="field mt-1"
-                  value={productForm.code}
-                  onChange={(event) =>
-                    setProductForm((prev) => ({ ...prev, code: event.target.value }))
-                  }
-                  required
-                />
-              </label>
+            <div className="grid gap-3">
               <label>
                 Nombre
                 <input
@@ -703,20 +768,178 @@ export default function Home() {
         <article className="panel overflow-hidden">
           <div className="border-b border-[var(--line)] p-4">
             <h2 className="text-lg font-semibold">Productos</h2>
+            <div className="mt-3 flex items-center gap-2 text-sm">
+              <label htmlFor="category-filter">Filtrar por categoria:</label>
+              <select
+                id="category-filter"
+                className="field max-w-xs"
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+              >
+                <option value="ALL">Todos</option>
+                {categoryOptions.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <div className="space-y-3 p-3 sm:hidden">
+              {visibleProducts.map((product) => {
+                const paths = product.product_images?.map((image) => image.path) ?? [];
+                const imageUrl = paths[0] ? getImageUrl(paths[0]) : "";
+                const low = product.stock <= product.min_stock;
+                const isEditing = editingProductId === product.id;
+
+                return (
+                  <div key={product.id} className="rounded-lg border border-[var(--line)] p-3">
+                    <div className="mb-2 flex items-start gap-3">
+                      {imageUrl ? (
+                        <button
+                          type="button"
+                          className="group relative block"
+                          onClick={() => openImageViewer(paths, 0)}
+                          title="Ampliar fotos"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={imageUrl}
+                            alt={product.name}
+                            className="h-12 w-12 rounded-lg border border-[var(--line)] object-cover"
+                          />
+                        </button>
+                      ) : (
+                        <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-[var(--line)] text-xs text-[var(--muted)]">
+                          Sin foto
+                        </div>
+                      )}
+                      <div>
+                        <p className="font-semibold">{product.name}</p>
+                        <p className="text-xs text-[var(--muted)]">{product.code}</p>
+                        <p className="text-xs text-[var(--muted)]">Categoria: {product.category ?? "-"}</p>
+                      </div>
+                    </div>
+                    <p className="text-sm">
+                      Stock:{" "}
+                      <span className={`badge ${low ? "bg-red-100 text-red-800" : ""}`}>
+                        {product.stock}
+                      </span>{" "}
+                      <span className="text-xs text-[var(--muted)]">Min: {product.min_stock}</span>
+                    </p>
+                    <p className="text-sm">Ubicacion: {product.location ?? "-"}</p>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" className="btn" onClick={() => startEditProduct(product)}>
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        onClick={() => void deleteProduct(product.id, product.name)}
+                      >
+                        Eliminar
+                      </button>
+                      <label className="btn cursor-pointer">
+                        {uploadingImageProductId === product.id ? "Subiendo..." : "Agregar fotos"}
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept="image/*"
+                          multiple
+                          disabled={uploadingImageProductId === product.id}
+                          onChange={(event) => {
+                            const files = Array.from(event.target.files ?? []);
+                            event.target.value = "";
+                            void addImagesToProduct(product.id, files);
+                          }}
+                        />
+                      </label>
+                    </div>
+                    {isEditing ? (
+                      <div className="mt-3 space-y-2">
+                        <input
+                          className="field"
+                          value={editProduct.name}
+                          onChange={(event) =>
+                            setEditProduct((prev) => ({ ...prev, name: event.target.value }))
+                          }
+                        />
+                        <input
+                          className="field"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={editProduct.stock}
+                          onChange={(event) =>
+                            setEditProduct((prev) => ({ ...prev, stock: event.target.value }))
+                          }
+                        />
+                        <input
+                          className="field"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={editProduct.min_stock}
+                          onChange={(event) =>
+                            setEditProduct((prev) => ({ ...prev, min_stock: event.target.value }))
+                          }
+                        />
+                        <input
+                          className="field"
+                          value={editProduct.location}
+                          onChange={(event) =>
+                            setEditProduct((prev) => ({ ...prev, location: event.target.value }))
+                          }
+                          placeholder="Ubicacion"
+                        />
+                        <input
+                          className="field"
+                          value={editProduct.category}
+                          onChange={(event) =>
+                            setEditProduct((prev) => ({ ...prev, category: event.target.value }))
+                          }
+                          placeholder="Categoria"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={savingEdit}
+                            onClick={() => void saveEditProduct(product.id)}
+                          >
+                            Guardar
+                          </button>
+                          <button type="button" className="btn" onClick={cancelEditProduct}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {!visibleProducts.length && !loading ? (
+                <p className="text-center text-sm text-[var(--muted)]">
+                  No hay productos para el filtro seleccionado.
+                </p>
+              ) : null}
+            </div>
+
+            <table className="hidden min-w-full text-sm sm:table">
               <thead className="bg-slate-100">
                 <tr>
                   <th className="px-3 py-2 text-left">Imagen</th>
                   <th className="px-3 py-2 text-left">Producto</th>
+                  <th className="px-3 py-2 text-left">Categoria</th>
                   <th className="px-3 py-2 text-left">Stock</th>
                   <th className="px-3 py-2 text-left">Ubicacion</th>
                   <th className="px-3 py-2 text-left">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {products.map((product) => {
+                {visibleProducts.map((product) => {
                   const paths = product.product_images?.map((image) => image.path) ?? [];
                   const imageUrl = paths[0] ? getImageUrl(paths[0]) : "";
                   const low = product.stock <= product.min_stock;
@@ -777,13 +1000,6 @@ export default function Home() {
                                 setEditProduct((prev) => ({ ...prev, name: event.target.value }))
                               }
                             />
-                            <input
-                              className="field"
-                              value={editProduct.code}
-                              onChange={(event) =>
-                                setEditProduct((prev) => ({ ...prev, code: event.target.value }))
-                              }
-                            />
                           </div>
                         ) : (
                           <>
@@ -792,6 +1008,7 @@ export default function Home() {
                           </>
                         )}
                       </td>
+                      <td className="px-3 py-2">{product.category ?? "-"}</td>
                       <td className="px-3 py-2">
                         {isEditing ? (
                           <div className="space-y-2">
@@ -925,10 +1142,10 @@ export default function Home() {
                     </tr>
                   );
                 })}
-                {!products.length && !loading ? (
+                {!visibleProducts.length && !loading ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-4 text-center text-[var(--muted)]">
-                      No hay productos registrados.
+                    <td colSpan={6} className="px-3 py-4 text-center text-[var(--muted)]">
+                      No hay productos para el filtro seleccionado.
                     </td>
                   </tr>
                 ) : null}
@@ -942,7 +1159,104 @@ export default function Home() {
             <h2 className="text-lg font-semibold">Historial de movimientos</h2>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <div className="space-y-3 p-3 sm:hidden">
+              {movements.map((movement) => {
+                const isEditing = editingMovementId === movement.id;
+                return (
+                  <div key={movement.id} className="rounded-lg border border-[var(--line)] p-3">
+                    <p className="text-xs text-[var(--muted)]">
+                      {new Date(movement.created_at).toLocaleString()}
+                    </p>
+                    <p className="font-semibold">
+                      {movement.products?.code} - {movement.products?.name}
+                    </p>
+                    <p className="text-sm">Tipo: {movement.type === "EXIT" ? "Salida" : "Entrada"}</p>
+                    <p className="text-sm">Cantidad: {movement.quantity}</p>
+                    <p className="text-sm">Uso: {movement.reason}</p>
+                    <p className="text-sm">Responsable: {movement.requested_by ?? "-"}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => startEditMovement(movement)}
+                      >
+                        Editar
+                      </button>
+                      {movementDeleteMode ? (
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          onClick={() => void deleteMovement(movement.id)}
+                        >
+                          Eliminar
+                        </button>
+                      ) : null}
+                    </div>
+                    {isEditing ? (
+                      <div className="mt-2 space-y-2">
+                        <select
+                          className="field"
+                          value={editMovement.type}
+                          onChange={(event) =>
+                            setEditMovement((prev) => ({
+                              ...prev,
+                              type: event.target.value as MovementType,
+                            }))
+                          }
+                        >
+                          <option value="ENTRY">Entrada</option>
+                          <option value="EXIT">Salida</option>
+                        </select>
+                        <input
+                          className="field"
+                          type="number"
+                          min={0.01}
+                          step="0.01"
+                          value={editMovement.quantity}
+                          onChange={(event) =>
+                            setEditMovement((prev) => ({
+                              ...prev,
+                              quantity: event.target.value,
+                            }))
+                          }
+                        />
+                        <input
+                          className="field"
+                          value={editMovement.reason}
+                          onChange={(event) =>
+                            setEditMovement((prev) => ({ ...prev, reason: event.target.value }))
+                          }
+                        />
+                        <input
+                          className="field"
+                          value={editMovement.requested_by}
+                          onChange={(event) =>
+                            setEditMovement((prev) => ({
+                              ...prev,
+                              requested_by: event.target.value,
+                            }))
+                          }
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => void saveEditMovement(movement.id)}
+                          >
+                            Guardar
+                          </button>
+                          <button type="button" className="btn" onClick={cancelEditMovement}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            <table className="hidden min-w-full text-sm sm:table">
               <thead className="bg-slate-100">
                 <tr>
                   <th className="px-3 py-2 text-left">Fecha</th>
@@ -1066,13 +1380,15 @@ export default function Home() {
                             >
                               Editar
                             </button>
-                            <button
-                              type="button"
-                              className="btn btn-danger"
-                              onClick={() => void deleteMovement(movement.id)}
-                            >
-                              Eliminar
-                            </button>
+                            {movementDeleteMode ? (
+                              <button
+                                type="button"
+                                className="btn btn-danger"
+                                onClick={() => void deleteMovement(movement.id)}
+                              >
+                                Eliminar
+                              </button>
+                            ) : null}
                           </div>
                         )}
                       </td>
@@ -1090,6 +1406,57 @@ export default function Home() {
             </table>
           </div>
         </article>
+      </section>
+
+      <section className="mt-5 panel overflow-hidden">
+        <div className="border-b border-[var(--line)] p-4">
+          <h2 className="text-lg font-semibold">Auditoria de acciones</h2>
+          <p className="text-xs text-[var(--muted)]">
+            Registro de quien modifica, elimina o crea datos, con fecha y hora.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <div className="space-y-2 p-3 sm:hidden">
+            {auditLogs.map((log) => (
+              <div key={log.id} className="rounded-lg border border-[var(--line)] p-3">
+                <p className="text-xs text-[var(--muted)]">{new Date(log.created_at).toLocaleString()}</p>
+                <p className="text-sm">Usuario: {log.actor_email ?? "-"}</p>
+                <p className="text-sm">Accion: {log.action}</p>
+                <p className="text-sm">Entidad: {log.entity_type}</p>
+              </div>
+            ))}
+          </div>
+
+          <table className="hidden min-w-full text-sm sm:table">
+            <thead className="bg-slate-100">
+              <tr>
+                <th className="px-3 py-2 text-left">Fecha</th>
+                <th className="px-3 py-2 text-left">Usuario</th>
+                <th className="px-3 py-2 text-left">Accion</th>
+                <th className="px-3 py-2 text-left">Entidad</th>
+                <th className="px-3 py-2 text-left">ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {auditLogs.map((log) => (
+                <tr key={log.id} className="border-t border-[var(--line)]">
+                  <td className="px-3 py-2 text-xs">{new Date(log.created_at).toLocaleString()}</td>
+                  <td className="px-3 py-2">{log.actor_email ?? "-"}</td>
+                  <td className="px-3 py-2">{log.action}</td>
+                  <td className="px-3 py-2">{log.entity_type}</td>
+                  <td className="px-3 py-2 text-xs">{log.entity_id ?? "-"}</td>
+                </tr>
+              ))}
+              {!auditLogs.length && !loading ? (
+                <tr>
+                  <td colSpan={5} className="px-3 py-4 text-center text-[var(--muted)]">
+                    Aun no hay registros de auditoria.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       {viewerImages.length ? (

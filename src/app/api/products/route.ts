@@ -1,11 +1,16 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { createServerClient } from "@/lib/supabase";
+import { requireActor } from "@/lib/server-auth";
+import { writeAuditLog } from "@/lib/audit";
 
 const BUCKET = "products";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+
     const supabase = createServerClient();
     const { data, error } = await supabase
       .from("products")
@@ -29,8 +34,11 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const auth = await requireActor(request);
+    if (!auth.ok) return auth.response;
+
     const formData = await request.formData();
-    const code = String(formData.get("code") ?? "").trim();
+    const inputCode = String(formData.get("code") ?? "").trim();
     const name = String(formData.get("name") ?? "").trim();
     const category = String(formData.get("category") ?? "").trim() || null;
     const location = String(formData.get("location") ?? "").trim() || null;
@@ -45,12 +53,15 @@ export async function POST(request: Request) {
       files.push(legacyFile);
     }
 
-    if (!code || !name || Number.isNaN(stock) || Number.isNaN(minStock)) {
+    if (!name || Number.isNaN(stock) || Number.isNaN(minStock)) {
       return NextResponse.json(
-        { error: "Datos invalidos: codigo, nombre, stock y stock minimo son obligatorios" },
+        { error: "Datos invalidos: nombre, stock y stock minimo son obligatorios" },
         { status: 400 },
       );
     }
+
+    const code =
+      inputCode || `P-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 4).toUpperCase()}`;
 
     const supabase = createServerClient();
     const { data: product, error: productError } = await supabase
@@ -105,6 +116,14 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: imageError.message }, { status: 500 });
       }
     }
+
+    await writeAuditLog(supabase, {
+      actor: auth.actor,
+      action: "PRODUCT_CREATE",
+      entityType: "product",
+      entityId: product.id,
+      detail: { code, name, imagesUploaded: files.length },
+    });
 
     return NextResponse.json({ ok: true, productId: product.id });
   } catch (error) {

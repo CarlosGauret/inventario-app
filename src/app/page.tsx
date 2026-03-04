@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createPublicClient } from "@/lib/supabase";
 import type { AuditLog, Movement, MovementType, Product } from "@/lib/types";
@@ -104,6 +105,11 @@ export default function Home() {
   const [userEmail, setUserEmail] = useState<string>("");
   const [movementDeleteMode, setMovementDeleteMode] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState("ALL");
+  const [selectedAudit, setSelectedAudit] = useState<AuditLog | null>(null);
+  const [highlightProductId, setHighlightProductId] = useState<string | null>(null);
+  const [highlightMovementId, setHighlightMovementId] = useState<string | null>(null);
+  const productsSectionRef = useRef<HTMLElement | null>(null);
+  const movementsSectionRef = useRef<HTMLElement | null>(null);
 
   const lowStockCount = useMemo(
     () => products.filter((product) => product.stock <= product.min_stock).length,
@@ -121,6 +127,77 @@ export default function Home() {
     if (categoryFilter === "ALL") return products;
     return products.filter((product) => (product.category ?? "") === categoryFilter);
   }, [products, categoryFilter]);
+
+  const productsById = useMemo(
+    () => new Map(products.map((product) => [product.id, product])),
+    [products],
+  );
+  const movementsById = useMemo(
+    () => new Map(movements.map((movement) => [movement.id, movement])),
+    [movements],
+  );
+
+  function actionLabel(action: string) {
+    const map: Record<string, string> = {
+      PRODUCT_CREATE: "Se registro producto",
+      PRODUCT_UPDATE: "Se modifico producto",
+      PRODUCT_DELETE: "Se elimino producto",
+      PRODUCT_ADD_IMAGES: "Se agregaron fotos",
+      MOVEMENT_CREATE: "Se registro movimiento",
+      MOVEMENT_UPDATE: "Se modifico movimiento",
+      MOVEMENT_DELETE: "Se elimino movimiento",
+    };
+    return map[action] ?? action;
+  }
+
+  function movementTypeLabel(type: unknown) {
+    if (type === "ENTRY") return "entrada";
+    if (type === "EXIT") return "salida";
+    return "movimiento";
+  }
+
+  function auditSummary(log: AuditLog) {
+    const detail = log.detail ?? {};
+    if (log.action === "MOVEMENT_CREATE") {
+      const qty = detail.quantity ?? "?";
+      const type = movementTypeLabel(detail.type);
+      const reason = detail.reason ? ` para "${String(detail.reason)}"` : "";
+      return `Se registro ${type} de ${qty}${reason}.`;
+    }
+    if (log.action === "MOVEMENT_UPDATE") {
+      const qty = detail.newQuantity ?? "?";
+      const type = movementTypeLabel(detail.newType);
+      return `Se actualizo movimiento a ${type} con cantidad ${qty}.`;
+    }
+    if (log.action === "MOVEMENT_DELETE") {
+      return "Se elimino el movimiento y se ajusto stock automaticamente.";
+    }
+    if (log.action === "PRODUCT_CREATE") {
+      return `Se creo producto "${String(detail.name ?? "")}" con codigo ${String(detail.code ?? "")}.`;
+    }
+    if (log.action === "PRODUCT_UPDATE") {
+      return "Se modificaron datos del producto.";
+    }
+    if (log.action === "PRODUCT_ADD_IMAGES") {
+      return `Se agregaron ${String(detail.imagesUploaded ?? 0)} imagen(es) al producto.`;
+    }
+    if (log.action === "PRODUCT_DELETE") {
+      return "Se elimino el producto del listado activo.";
+    }
+    return "Accion registrada en auditoria.";
+  }
+
+  function getAuditProductId(log: AuditLog): string | null {
+    if (log.entity_type === "product" && log.entity_id) return log.entity_id;
+    const detail = log.detail ?? {};
+    const fromDetail = detail.product_id;
+    return typeof fromDetail === "string" ? fromDetail : null;
+  }
+
+  function getAuditMovementId(log: AuditLog): string | null {
+    if (log.entity_type === "movement" && log.entity_id) return log.entity_id;
+    return null;
+  }
 
   async function authFetch(input: RequestInfo | URL, init?: RequestInit) {
     const { data } = await supabase.auth.getSession();
@@ -527,6 +604,19 @@ export default function Home() {
     setViewerIndex(0);
   }
 
+  function focusProduct(productId: string) {
+    setCategoryFilter("ALL");
+    setHighlightProductId(productId);
+    productsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => setHighlightProductId(null), 2200);
+  }
+
+  function focusMovement(movementId: string) {
+    setHighlightMovementId(movementId);
+    movementsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => setHighlightMovementId(null), 2200);
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
     router.replace("/login");
@@ -557,6 +647,9 @@ export default function Home() {
           <span>Total productos: {products.length}</span>
           <span>Stock bajo: {lowStockCount}</span>
           <span className="text-[var(--muted)]">{userEmail}</span>
+          <Link className="btn" href="/catalogo">
+            Catalogo/Exportar
+          </Link>
           <button type="button" className="btn" onClick={() => void signOut()}>
             Cerrar sesion
           </button>
@@ -765,7 +858,7 @@ export default function Home() {
       </section>
 
       <section className="mt-5 grid gap-4 lg:grid-cols-2">
-        <article className="panel overflow-hidden">
+        <article className="panel overflow-hidden" ref={productsSectionRef}>
           <div className="border-b border-[var(--line)] p-4">
             <h2 className="text-lg font-semibold">Productos</h2>
             <div className="mt-3 flex items-center gap-2 text-sm">
@@ -794,7 +887,14 @@ export default function Home() {
                 const isEditing = editingProductId === product.id;
 
                 return (
-                  <div key={product.id} className="rounded-lg border border-[var(--line)] p-3">
+                  <div
+                    key={product.id}
+                    className={`rounded-lg border p-3 ${
+                      highlightProductId === product.id
+                        ? "border-emerald-400 bg-emerald-50"
+                        : "border-[var(--line)]"
+                    }`}
+                  >
                     <div className="mb-2 flex items-start gap-3">
                       {imageUrl ? (
                         <button
@@ -946,7 +1046,12 @@ export default function Home() {
                   const isEditing = editingProductId === product.id;
 
                   return (
-                    <tr key={product.id} className="border-t border-[var(--line)]">
+                    <tr
+                      key={product.id}
+                      className={`border-t ${
+                        highlightProductId === product.id ? "bg-emerald-50" : "border-[var(--line)]"
+                      }`}
+                    >
                       <td className="px-3 py-2">
                         {imageUrl ? (
                           <button
@@ -1154,7 +1259,7 @@ export default function Home() {
           </div>
         </article>
 
-        <article className="panel overflow-hidden">
+        <article className="panel overflow-hidden" ref={movementsSectionRef}>
           <div className="border-b border-[var(--line)] p-4">
             <h2 className="text-lg font-semibold">Historial de movimientos</h2>
           </div>
@@ -1163,7 +1268,14 @@ export default function Home() {
               {movements.map((movement) => {
                 const isEditing = editingMovementId === movement.id;
                 return (
-                  <div key={movement.id} className="rounded-lg border border-[var(--line)] p-3">
+                  <div
+                    key={movement.id}
+                    className={`rounded-lg border p-3 ${
+                      highlightMovementId === movement.id
+                        ? "border-amber-400 bg-amber-50"
+                        : "border-[var(--line)]"
+                    }`}
+                  >
                     <p className="text-xs text-[var(--muted)]">
                       {new Date(movement.created_at).toLocaleString()}
                     </p>
@@ -1272,7 +1384,12 @@ export default function Home() {
                 {movements.map((movement) => {
                   const isEditing = editingMovementId === movement.id;
                   return (
-                    <tr key={movement.id} className="border-t border-[var(--line)]">
+                    <tr
+                      key={movement.id}
+                      className={`border-t ${
+                        highlightMovementId === movement.id ? "bg-amber-50" : "border-[var(--line)]"
+                      }`}
+                    >
                       <td className="px-3 py-2 text-xs">
                         {new Date(movement.created_at).toLocaleString()}
                       </td>
@@ -1421,8 +1538,12 @@ export default function Home() {
               <div key={log.id} className="rounded-lg border border-[var(--line)] p-3">
                 <p className="text-xs text-[var(--muted)]">{new Date(log.created_at).toLocaleString()}</p>
                 <p className="text-sm">Usuario: {log.actor_email ?? "-"}</p>
-                <p className="text-sm">Accion: {log.action}</p>
+                <p className="text-sm">Accion: {actionLabel(log.action)}</p>
                 <p className="text-sm">Entidad: {log.entity_type}</p>
+                <p className="mt-1 text-sm text-[var(--muted)]">{auditSummary(log)}</p>
+                <button type="button" className="btn mt-2" onClick={() => setSelectedAudit(log)}>
+                  Ver resumen
+                </button>
               </div>
             ))}
           </div>
@@ -1433,8 +1554,10 @@ export default function Home() {
                 <th className="px-3 py-2 text-left">Fecha</th>
                 <th className="px-3 py-2 text-left">Usuario</th>
                 <th className="px-3 py-2 text-left">Accion</th>
+                <th className="px-3 py-2 text-left">Resumen</th>
                 <th className="px-3 py-2 text-left">Entidad</th>
                 <th className="px-3 py-2 text-left">ID</th>
+                <th className="px-3 py-2 text-left">Detalle</th>
               </tr>
             </thead>
             <tbody>
@@ -1442,14 +1565,20 @@ export default function Home() {
                 <tr key={log.id} className="border-t border-[var(--line)]">
                   <td className="px-3 py-2 text-xs">{new Date(log.created_at).toLocaleString()}</td>
                   <td className="px-3 py-2">{log.actor_email ?? "-"}</td>
-                  <td className="px-3 py-2">{log.action}</td>
+                  <td className="px-3 py-2">{actionLabel(log.action)}</td>
+                  <td className="px-3 py-2">{auditSummary(log)}</td>
                   <td className="px-3 py-2">{log.entity_type}</td>
                   <td className="px-3 py-2 text-xs">{log.entity_id ?? "-"}</td>
+                  <td className="px-3 py-2">
+                    <button type="button" className="btn" onClick={() => setSelectedAudit(log)}>
+                      Ver
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!auditLogs.length && !loading ? (
                 <tr>
-                  <td colSpan={5} className="px-3 py-4 text-center text-[var(--muted)]">
+                  <td colSpan={7} className="px-3 py-4 text-center text-[var(--muted)]">
                     Aun no hay registros de auditoria.
                   </td>
                 </tr>
@@ -1458,6 +1587,107 @@ export default function Home() {
           </table>
         </div>
       </section>
+
+      {selectedAudit ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3"
+          onClick={() => setSelectedAudit(null)}
+        >
+          <div
+            className="panel w-full max-w-2xl bg-white p-4"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">Resumen de accion</h3>
+                <p className="text-xs text-[var(--muted)]">
+                  {new Date(selectedAudit.created_at).toLocaleString()}
+                </p>
+              </div>
+              <button type="button" className="btn" onClick={() => setSelectedAudit(null)}>
+                Cerrar
+              </button>
+            </div>
+
+            <div className="space-y-2 text-sm">
+              <p>
+                <b>Usuario:</b> {selectedAudit.actor_email ?? "-"}
+              </p>
+              <p>
+                <b>Accion:</b> {actionLabel(selectedAudit.action)}
+              </p>
+              <p>
+                <b>Resumen:</b> {auditSummary(selectedAudit)}
+              </p>
+              <p>
+                <b>Entidad:</b> {selectedAudit.entity_type}
+              </p>
+              {(() => {
+                const productId = getAuditProductId(selectedAudit);
+                if (!productId) return null;
+                const product = productsById.get(productId);
+                return (
+                  <p>
+                    <b>Producto:</b>{" "}
+                    {product ? `${product.code} - ${product.name}` : `ID ${productId}`}
+                  </p>
+                );
+              })()}
+              {(() => {
+                const movementId = getAuditMovementId(selectedAudit);
+                if (!movementId) return null;
+                const movement = movementsById.get(movementId);
+                return (
+                  <p>
+                    <b>Movimiento:</b>{" "}
+                    {movement
+                      ? `${movement.type} (${movement.quantity}) - ${movement.reason}`
+                      : `ID ${movementId}`}
+                  </p>
+                );
+              })()}
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {getAuditProductId(selectedAudit) ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    const productId = getAuditProductId(selectedAudit);
+                    if (!productId) return;
+                    setSelectedAudit(null);
+                    focusProduct(productId);
+                  }}
+                >
+                  Ver producto relacionado
+                </button>
+              ) : null}
+              {getAuditMovementId(selectedAudit) ? (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    const movementId = getAuditMovementId(selectedAudit);
+                    if (!movementId) return;
+                    setSelectedAudit(null);
+                    focusMovement(movementId);
+                  }}
+                >
+                  Ver movimiento relacionado
+                </button>
+              ) : null}
+            </div>
+
+            <div className="mt-4 rounded-lg border border-[var(--line)] bg-slate-50 p-3 text-xs">
+              <p className="mb-1 font-semibold">Detalle tecnico (JSON)</p>
+              <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words">
+                {JSON.stringify(selectedAudit.detail ?? {}, null, 2)}
+              </pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {viewerImages.length ? (
         <div

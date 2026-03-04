@@ -53,7 +53,7 @@ export async function POST(request: Request) {
     }
 
     const supabase = createServerClient();
-    const { error } = await supabase.rpc("register_movement", {
+    const { data: movementId, error } = await supabase.rpc("register_movement", {
       p_product_id: body.product_id,
       p_type: body.type,
       p_quantity: body.quantity,
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
       actor: auth.actor,
       action: "MOVEMENT_CREATE",
       entityType: "movement",
-      entityId: null,
+      entityId: movementId ? String(movementId) : null,
       detail: {
         product_id: body.product_id,
         type: body.type,
